@@ -14,7 +14,50 @@ jobs:
         with:
           host: "ssh-${{ secrets.USERNAME }}.alwaysdata.net"
           username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}  # 🔐 Ne surtout pas mélanger avec 'password'
+          script: |
+            echo "✅ Connexion réussie"
+            mkdir -p $HOME/www/tmp/
+
+  Copy:
+    needs: Connexion
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cloner le repo dans le runner
+        uses: actions/checkout@v4
+
+      - name: Copier le code sur AlwaysData via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: "ssh-${{ secrets.USERNAME }}.alwaysdata.net"
+          username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            cd $HOME/www/
-            echo "✅ Connexion réussie depuis GitHub Actions !"
+            rm -rf $HOME/www/tmp/*
+            mkdir -p $HOME/www/tmp/
+            exit 0  # évite échec en cas de rsync manquant
+
+      - name: Déployer le code avec rsync
+        run: |
+          sudo apt-get update && sudo apt-get install -y rsync
+          rsync -avz ./ ssh-${{ secrets.USERNAME }}.alwaysdata.net:$HOME/www/
+
+  Restart:
+    needs: Copy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restart AlwaysData site
+        run: |
+          response_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST --basic --user "${{ secrets.ALWAYSDATA_TOKEN }}:" https://api.alwaysdata.com/v1/site/${{ secrets.ALWAYSDATA_SITE_ID }}/restart/)
+          if [ "$response_code" -eq 204 ]; then
+            echo "✅ Site redémarré avec succès"
+          elif [ "$response_code" -eq 404 ]; then
+            echo "❌ Mauvais ID de site"
+            exit 1
+          elif [ "$response_code" -eq 401 ]; then
+            echo "❌ Mauvais token API"
+            exit 1
+          else
+            echo "❌ Échec : code $response_code"
+            exit 1
+          fi
